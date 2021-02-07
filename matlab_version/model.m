@@ -36,8 +36,8 @@ decoderLG = layerGraph([imageInputLayer([1 1 latentDim],'Name','input_decoder','
     fullyConnectedLayer(5, 'Name', 'fc4')
     sigmoidLayer('Name','sm')]);
     
-encoderNet = dlnetwork(encoderLG);
-decoderNet = dlnetwork(decoderLG);
+encoder = dlnetwork(encoderLG);
+decoder = dlnetwork(decoderLG);
 
 
 % Training loop
@@ -80,22 +80,22 @@ for epoch = 1:numEpochs
         % Update the learnables and average gradients for both networks
         % using adamupdate function
         % adamupdate: https://uk.mathworks.com/help/deeplearning/ref/adamupdate.html
-        [infGrad, genGrad] = dlfeval(@modelGradients, encoderNet, decoderNet, XBatch);
+        [infGrad, genGrad] = dlfeval(@modelGradients, encoder, decoder, XBatch);
         
-        [decoderNet.Learnables, avgGradientsDecoder, avgGradientsSquaredDecoder] = ...
-            adamupdate(decoderNet.Learnables, ...
+        [decoder.Learnables, avgGradientsDecoder, avgGradientsSquaredDecoder] = ...
+            adamupdate(decoder.Learnables, ...
                 genGrad, avgGradientsDecoder, avgGradientsSquaredDecoder, iteration, lr);
             
-        [encoderNet.Learnables, avgGradientsEncoder, avgGradientsSquaredEncoder] = ...
-            adamupdate(encoderNet.Learnables, ...
+        [encoder.Learnables, avgGradientsEncoder, avgGradientsSquaredEncoder] = ...
+            adamupdate(encoder.Learnables, ...
                 infGrad, avgGradientsEncoder, avgGradientsSquaredEncoder, iteration, lr);
     end
     elapsedTime = toc; 
     
     % Finally, pass the test set images through autoencoder and calculate
     % loss for this epoch
-    [z, zMean, zLogvar] = sample(encoderNet,X_Test);
-    xPred = forward(decoderNet, z);
+    [z, zMean, zLogvar] = sample(encoder,X_Test);
+    xPred = forward(decoder, z);
     xPred = reshape(xPred,5,1,num_test);
     xPred = dlarray(xPred, 'SSCB');
  
@@ -105,22 +105,15 @@ for epoch = 1:numEpochs
     disp("Epoch : "+epoch+" Test ELBO loss = "+gather(extractdata(elbo))+". Time taken for epoch = "+ elapsedTime + "s")    
 end
 
-XTest = X(:,:,10);
-XTest = dlarray(XTest, 'SSCB');
- 
-% Convert encoding to dlarray object in SSCB format
-zSampled = dlarray(z, 'SSCB');
-xPred = decoderNet.predict(zSampled);
 
-
-function [infGrad, genGrad] = modelGradients(encoderNet, decoderNet, x)
+function [infGrad, genGrad] = modelGradients(encoder, decoder, x)
     % obtain the encodings obtained from the sampling function.
-    [z, z_mu, z_sigma] = sample(encoderNet, x);
+    [z, z_mu, z_sigma] = sample(encoder, x);
 
     % obtain predicted dlarray using sigmoid function on the output of the
     % decoder network and input data z
     sz = size(x,4);
-    xPred = forward(decoderNet, z);
+    xPred = forward(decoder, z);
     xPred = reshape(xPred,5,1,sz);
     xPred = reshape(xPred, [5,1,1,size(xPred,3)]);
     xPred = dlarray(xPred, 'SSCB');
@@ -131,13 +124,13 @@ function [infGrad, genGrad] = modelGradients(encoderNet, decoderNet, x)
     %loss = dlarray(single(loss), 'SSCB');
     % Calculate the gradients of the loss with respect to the learnable
     % parameters of both encoder and decoder networks.
-    [genGrad, infGrad] = dlgradient(loss, decoderNet.Learnables,encoderNet.Learnables);
+    [genGrad, infGrad] = dlgradient(loss, decoder.Learnables,encoder.Learnables);
 end
 
 
-function [zSampled, zMean, zLogvar] = sample(encoderNet, x)
+function [zSampled, zMean, zLogvar] = sample(encoder, x)
     % x is our sequence batch
-    encoded = forward(encoderNet, x);
+    encoded = forward(encoder, x);
     d = size(encoded,1)/2;
     zMean = encoded(1:d,:);
     zLogvar = encoded(1+d:end,:);
@@ -154,7 +147,6 @@ function [zSampled, zMean, zLogvar] = sample(encoderNet, x)
 end
 
 function loss = vae_loss(x,xPred,z_mu,z_sigma)
-%recon_loss = crossentropy(xPred,x);
 recon_loss = crossentropy(xPred,x,'TargetCategories','independent');
 kl_loss = -5e-4 * mean(1 + z_sigma - z_mu.^2 - exp(z_sigma), 1);
 loss = mean(recon_loss + kl_loss);
